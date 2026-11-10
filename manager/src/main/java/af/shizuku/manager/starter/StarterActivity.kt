@@ -791,8 +791,8 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 StarterStep("detect_port", R.string.starter_step_detect_port),
                 StarterStep("detect_pairing", R.string.starter_step_detect_pairing),
                 StarterStep("start_service", R.string.starter_step_start_service),
-                StarterStep("shell_check", R.string.starter_step_shell_check),
                 StarterStep("wait_binder", R.string.starter_step_wait_binder),
+                StarterStep("shell_check", R.string.starter_step_shell_check),
                 StarterStep("complete", R.string.starter_step_complete)
             )
         )
@@ -1079,8 +1079,8 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 StarterStep("one_tap_wireless", R.string.one_tap_step_wireless),
                 StarterStep("one_tap_pairing", R.string.one_tap_step_pairing),
                 StarterStep("one_tap_auth", R.string.one_tap_step_auth),
-                StarterStep("one_tap_shell", R.string.starter_step_shell_check),
                 StarterStep("one_tap_start", R.string.one_tap_step_start),
+                StarterStep("one_tap_shell", R.string.starter_step_shell_check),
                 StarterStep("one_tap_complete", R.string.one_tap_step_complete)
             )
         )
@@ -1175,52 +1175,8 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         updateStep("one_tap_auth", StepStatus.RUNNING, appContext.getString(R.string.one_tap_step_auth_running))
-        // Same privilege gate as the regular ADB flow: the shell card stays PENDING until
-        // AdbStarter's `id` check proves the session really holds shell root, and only then
-        // does the demo command run.
-        val onShellStart: () -> Unit = {
-            updateStep(
-                "one_tap_shell",
-                StepStatus.RUNNING,
-                appContext.getString(R.string.starter_step_shell_check_running)
-            )
-        }
-        val onShellResult: (Result<String>) -> Unit = { result ->
-            result.onSuccess { out ->
-                updateStep(
-                    "one_tap_shell",
-                    StepStatus.COMPLETED,
-                    out.ifEmpty { appContext.getString(R.string.starter_step_shell_check_empty) }
-                )
-            }.onFailure { e ->
-                updateStep(
-                    "one_tap_shell",
-                    StepStatus.WARNING,
-                    if (e is AdbShellPrivilegeException) {
-                        // Surface why the gate failed: `id` reported nothing usable (empty
-                        // stream, or a non shell/root uid) and the round-trip probe failed too.
-                        if (e.idOutput.isEmpty()) {
-                            appContext.getString(R.string.starter_step_shell_check_no_adb)
-                        } else {
-                            appContext.getString(
-                                R.string.starter_step_shell_check_no_adb_detail,
-                                e.idOutput.lineSequence().first().take(60)
-                            )
-                        }
-                    } else {
-                        appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
-                    }
-                )
-            }
-        }
         try {
-            AdbStarter.startAdb(
-                appContext,
-                port,
-                { log(it) },
-                onShellStart = onShellStart,
-                onShellResult = onShellResult,
-            )
+            AdbStarter.startAdb(appContext, port, { log(it) })
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             updateStep("one_tap_auth", StepStatus.ERROR, e.message ?: "")
@@ -1239,6 +1195,9 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         updateStep("one_tap_start", StepStatus.COMPLETED, "")
+
+        // Service is connected: only now run the shell commands, over a fresh ADB connection.
+        runShellStep("one_tap_shell")
         markCompleted()
     }
 
@@ -1248,51 +1207,8 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         updateStep("start_service", StepStatus.RUNNING, appContext.getString(R.string.starter_step_connecting))
-        // The shell command must NOT start while ADB is still connecting or unprivileged,
-        // so the card stays PENDING until AdbStarter reports that the session really holds
-        // shell privileges (it runs `id` first and only then fires onShellStart).
-        val onShellStart: () -> Unit = {
-            updateStep("shell_check", StepStatus.RUNNING, appContext.getString(R.string.starter_step_shell_check_running))
-        }
-        val onShellResult: (Result<String>) -> Unit = { result ->
-            // Invoked on the main thread by AdbStarter.
-            result.onSuccess { out ->
-                updateStep(
-                    "shell_check",
-                    StepStatus.COMPLETED,
-                    out.ifEmpty { appContext.getString(R.string.starter_step_shell_check_empty) }
-                )
-            }.onFailure { e ->
-                // WARNING survives markCompleted(), so a failed check stays visible as a
-                // yellow card instead of being normalised into a green one at the end.
-                updateStep(
-                    "shell_check",
-                    StepStatus.WARNING,
-                    if (e is AdbShellPrivilegeException) {
-                        // Surface why the gate failed: `id` reported nothing usable (empty
-                        // stream, or a non shell/root uid) and the round-trip probe failed too.
-                        if (e.idOutput.isEmpty()) {
-                            appContext.getString(R.string.starter_step_shell_check_no_adb)
-                        } else {
-                            appContext.getString(
-                                R.string.starter_step_shell_check_no_adb_detail,
-                                e.idOutput.lineSequence().first().take(60)
-                            )
-                        }
-                    } else {
-                        appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
-                    }
-                )
-            }
-        }
         try {
-            AdbStarter.startAdb(
-                appContext,
-                port,
-                { log(it) },
-                onShellStart = onShellStart,
-                onShellResult = onShellResult,
-            )
+            AdbStarter.startAdb(appContext, port, { log(it) })
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             // The wireless-debugging port can rotate between detection and connect
@@ -1308,13 +1224,7 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 ).w(e, "Port $port failed; retrying with redetected port ${redetected.first}")
                 updateStep("start_service", StepStatus.RUNNING, appContext.getString(R.string.starter_step_connecting))
                 try {
-                    AdbStarter.startAdb(
-                        appContext,
-                        redetected.first,
-                        { log(it) },
-                        onShellStart = onShellStart,
-                        onShellResult = onShellResult,
-                    )
+                    AdbStarter.startAdb(appContext, redetected.first, { log(it) })
                 } catch (e2: Exception) {
                     if (e2 is CancellationException) throw e2
                     updateStep("start_service", StepStatus.ERROR, e2.message ?: "")
@@ -1343,7 +1253,57 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         updateStep("wait_binder", StepStatus.COMPLETED, "")
+
+        // Service is connected: only now run the shell commands, over a fresh ADB connection.
+        runShellStep("shell_check")
         markCompleted()
+    }
+
+    /**
+     * Runs the post-start shell commands and renders the outcome on [stepId].
+     *
+     * Must be called *after* the Shizuku binder is reachable: the gate inside AdbStarter
+     * proves the ADB session can really execute commands before anything runs, and a
+     * failure here is reported as a warning instead of failing the whole start.
+     */
+    private suspend fun runShellStep(stepId: String) {
+        val result = AdbStarter.runShellAfterStart(appContext, { log(it) }) {
+            updateStep(
+                stepId,
+                StepStatus.RUNNING,
+                appContext.getString(R.string.starter_step_shell_check_running)
+            )
+        }
+        withContext(Dispatchers.Main) {
+            result.onSuccess { out ->
+                updateStep(
+                    stepId,
+                    StepStatus.COMPLETED,
+                    out.ifEmpty { appContext.getString(R.string.starter_step_shell_check_empty) }
+                )
+            }.onFailure { e ->
+                // WARNING survives markCompleted(), so a failed check stays visible as a
+                // yellow card instead of being normalised into a green one at the end.
+                updateStep(
+                    stepId,
+                    StepStatus.WARNING,
+                    if (e is AdbShellPrivilegeException) {
+                        // Surface why the gate failed: `id` reported nothing usable and the
+                        // echo round-trip did not come back either.
+                        if (e.idOutput.isEmpty()) {
+                            appContext.getString(R.string.starter_step_shell_check_no_adb)
+                        } else {
+                            appContext.getString(
+                                R.string.starter_step_shell_check_no_adb_detail,
+                                e.idOutput.lineSequence().first().take(60)
+                            )
+                        }
+                    } else {
+                        appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
+                    }
+                )
+            }
+        }
     }
 
     private fun markCompleted() {
