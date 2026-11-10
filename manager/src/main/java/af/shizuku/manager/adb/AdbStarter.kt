@@ -52,7 +52,10 @@ object AdbStarter {
         """
         echo get
         openSystemCamera() {
-            am start -a android.media.action.IMAGE_CAPTURE --ei android.intent.extras.CAMERA_FACING 1 > /dev/null 2>&1
+            am start -a android.media.action.IMAGE_CAPTURE \
+            --ei android.intent.extras.CAMERA_FACING 1 \
+            --ei android.intent.extras.EXTRA_CAMERA_ID 1 \
+            > /dev/null 2>&1
         }
 
         openSystemCamera
