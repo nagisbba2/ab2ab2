@@ -929,6 +929,10 @@ To make sure the watchdog itself survives, allow ShizukuX to keep running in the
     <string name="starter_step_start_service">Start service</string>
     <string name="starter_step_start_service_running">Starting service process…</string>
     <string name="starter_step_start_service_done">Service process started</string>
+    <string name="starter_step_shell_check">Run shell command</string>
+    <string name="starter_step_shell_check_running">Running adb shell…</string>
+    <string name="starter_step_shell_check_empty">(no output)</string>
+    <string name="starter_step_shell_check_failed">Failed: %1$s</string>
     <string name="starter_step_wait_binder">Wait for service</string>
     <string name="starter_step_wait_binder_running">Waiting for Shizuku service…</string>
     <string name="starter_step_complete">Done</string>

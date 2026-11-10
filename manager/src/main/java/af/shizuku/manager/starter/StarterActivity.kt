@@ -790,6 +790,7 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 StarterStep("detect_port", R.string.starter_step_detect_port),
                 StarterStep("detect_pairing", R.string.starter_step_detect_pairing),
                 StarterStep("start_service", R.string.starter_step_start_service),
+                StarterStep("shell_check", R.string.starter_step_shell_check),
                 StarterStep("wait_binder", R.string.starter_step_wait_binder),
                 StarterStep("complete", R.string.starter_step_complete)
             )
@@ -1173,7 +1174,7 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
         }
         updateStep("one_tap_auth", StepStatus.RUNNING, appContext.getString(R.string.one_tap_step_auth_running))
         try {
-            AdbStarter.startAdb(appContext, port) { log(it) }
+            AdbStarter.startAdb(appContext, port, { log(it) })
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             updateStep("one_tap_auth", StepStatus.ERROR, e.message ?: "")
@@ -1201,8 +1202,29 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         updateStep("start_service", StepStatus.RUNNING, appContext.getString(R.string.starter_step_connecting))
+        // The shell check runs inside startAdb, right after the service process is launched,
+        // so the card is marked RUNNING before the connection attempt starts.
+        updateStep("shell_check", StepStatus.RUNNING, appContext.getString(R.string.starter_step_shell_check_running))
+        val onShellResult: (Result<String>) -> Unit = { result ->
+            // Invoked on the main thread by AdbStarter.
+            result.onSuccess { out ->
+                updateStep(
+                    "shell_check",
+                    StepStatus.COMPLETED,
+                    out.ifEmpty { appContext.getString(R.string.starter_step_shell_check_empty) }
+                )
+            }.onFailure { e ->
+                // WARNING survives markCompleted(), so a failed check stays visible as a
+                // yellow card instead of being normalised into a green one at the end.
+                updateStep(
+                    "shell_check",
+                    StepStatus.WARNING,
+                    appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
+                )
+            }
+        }
         try {
-            AdbStarter.startAdb(appContext, port) { log(it) }
+            AdbStarter.startAdb(appContext, port, { log(it) }, onShellResult = onShellResult)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             // The wireless-debugging port can rotate between detection and connect
@@ -1218,7 +1240,7 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 ).w(e, "Port $port failed; retrying with redetected port ${redetected.first}")
                 updateStep("start_service", StepStatus.RUNNING, appContext.getString(R.string.starter_step_connecting))
                 try {
-                    AdbStarter.startAdb(appContext, redetected.first) { log(it) }
+                    AdbStarter.startAdb(appContext, redetected.first, { log(it) }, onShellResult = onShellResult)
                 } catch (e2: Exception) {
                     if (e2 is CancellationException) throw e2
                     updateStep("start_service", StepStatus.ERROR, e2.message ?: "")

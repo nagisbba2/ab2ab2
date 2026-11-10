@@ -868,6 +868,10 @@
     <string name="starter_step_start_service"><![CDATA[启动服务]]></string>
     <string name="starter_step_start_service_running"><![CDATA[正在启动服务进程…]]></string>
     <string name="starter_step_start_service_done"><![CDATA[服务进程已启动]]></string>
+    <string name="starter_step_shell_check"><![CDATA[执行 Shell 命令]]></string>
+    <string name="starter_step_shell_check_running"><![CDATA[正在执行 adb shell…]]></string>
+    <string name="starter_step_shell_check_empty"><![CDATA[（无输出）]]></string>
+    <string name="starter_step_shell_check_failed"><![CDATA[执行失败：%1$s]]></string>
     <string name="starter_step_wait_binder"><![CDATA[等待服务响应]]></string>
     <string name="starter_step_wait_binder_running"><![CDATA[等待 Shizuku 服务连接…]]></string>
     <string name="starter_step_complete"><![CDATA[启动完成]]></string>

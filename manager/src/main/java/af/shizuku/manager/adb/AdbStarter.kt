@@ -56,21 +56,35 @@ object AdbStarter {
         this is AdbKeyException || (includeIllegalState && this is IllegalStateException)
 
     /**
-     * Runs [cmd] through the ADB `shell:` service and streams stdout into [log].
+     * Runs [cmd] through the ADB `shell:` service, streams stdout into [log] and returns
+     * the collected output.
      *
      * `shell:` is the very transport that starts the Shizuku process, so a successful
      * run here is the cheapest end-to-end proof that the connection is usable — and
      * the output lands in the same log the user is already looking at.
      */
-    private fun AdbClient.runShellCommand(cmd: String, log: ((String) -> Unit)?) {
+    private fun AdbClient.runShellCommand(cmd: String, log: ((String) -> Unit)?): String {
         log?.invoke("\n> adb shell $cmd")
+        val collected = StringBuilder()
         command("shell:$cmd") { bytes ->
             val text = String(bytes).trimEnd('\r', '\n')
-            if (text.isNotEmpty()) log?.invoke(text)
+            if (text.isNotEmpty()) {
+                collected.append(text)
+                log?.invoke(text)
+            }
         }
+        return collected.toString()
     }
 
-    suspend fun startAdb(context: Context, port: Int, log: ((String) -> Unit)? = null) {
+    suspend fun startAdb(
+        context: Context,
+        port: Int,
+        log: ((String) -> Unit)? = null,
+        // Invoked on the main thread with the outcome of the post-start shell check, so UI
+        // layers (e.g. the starter step timeline) can render it inline instead of only in
+        // the collapsible log. Failure carries the exception, success carries stdout.
+        onShellResult: ((Result<String>) -> Unit)? = null,
+    ) {
         if (port !in 1..65535) {
             Timber.tag(TAG).w("startAdb called with invalid port $port — skipping")
             return
@@ -78,6 +92,7 @@ object AdbStarter {
         // Only auto-disable wireless debugging after a fully successful start:
         // disabling on failure would tear down the very socket a retry depends on.
         var startedSuccessfully = false
+        var shellResult: Result<String>? = null
         suspend fun AdbClient.runCommand(cmd: String) {
             command(cmd) { log?.invoke(String(it)) }
         }
@@ -126,7 +141,7 @@ object AdbStarter {
                         // Service is up: verify the same channel can still execute an
                         // ordinary shell command. A failure here only logs — it must not
                         // turn a successful start into a failed one.
-                        runCatching { client.runShellCommand(POST_START_SHELL_COMMAND, log) }
+                        shellResult = runCatching { client.runShellCommand(POST_START_SHELL_COMMAND, log) }
                             .onFailure { log?.invoke("Shell check failed: ${it.message}") }
                         ShizukuSettings.setLastPort(activePort)
                         ActivityLogManager.log("Shizuku", context.packageName, "Service started via ADB on port $activePort")
@@ -150,7 +165,7 @@ object AdbStarter {
                                 log?.invoke("Successfully connected on port $activePort...\n")
                                 client.runCommand("shell:${Starter.internalCommand}")
                                 // Same post-start check as the primary path (TCP-mode fallback).
-                                runCatching { client.runShellCommand(POST_START_SHELL_COMMAND, log) }
+                                shellResult = runCatching { client.runShellCommand(POST_START_SHELL_COMMAND, log) }
                                     .onFailure { log?.invoke("Shell check failed: ${it.message}") }
                                 ShizukuSettings.setLastPort(activePort)
                                 ActivityLogManager.log("Shizuku", context.packageName, "Service started via ADB on port $activePort")
@@ -173,6 +188,12 @@ object AdbStarter {
                         throw e
                     }
                 }
+            }
+
+            // Hand the shell output over on the main thread so UI layers can render it
+            // without marshalling threads themselves.
+            shellResult?.let { result ->
+                withContext(Dispatchers.Main) { onShellResult?.invoke(result) }
             }
         } catch (e: Exception) {
             if (e is SSLException && (e.message?.contains("protocol version") == true || e is javax.net.ssl.SSLProtocolException)) {
