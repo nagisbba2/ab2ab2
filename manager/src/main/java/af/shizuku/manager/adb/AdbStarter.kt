@@ -47,10 +47,7 @@ object AdbStarter {
     // These already run *inside* the device shell, so they must not carry the host-side
     // `adb shell` prefix — prepending it would make the device look for an `adb` binary.
     private val POST_START_SHELL_COMMANDS = listOf(
-        "echo '查看所有包名'",
-        "pm list packages -d",
-        "echo '删除文件'",
-        "rm /storage/emulated/0/1.txt",
+        "curl --help",
     )
 
     // Second opinion used when `id` comes back empty: this string is echoed by the device's
