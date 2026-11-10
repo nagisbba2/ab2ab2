@@ -101,12 +101,13 @@ object AdbStarter {
     /**
      * Runs [POST_START_SHELL_COMMANDS] once the Shizuku service is already reachable.
      *
-     * Every request uses its **own** ADB connection on purpose. adb `shell:` streams are
-     * opened with a fixed local id by this client, so sending a second request down the
-     * same socket can read a leftover close packet instead of the reply and silently
-     * produce an empty result — the "green card, (no output)" case. Only after `id` (or
-     * the echo round-trip) proves the session can execute shell commands does the demo
-     * command run, so nothing is ever executed before ADB privileges are confirmed.
+     * Timing: called only after the binder is up, so [POST_START_SHELL_COMMANDS] never
+     * starts before the service is actually connected.
+     *
+     * Performance: one ADB connection is opened and reused for the privilege probe and
+     * every command. [AdbClient.command] now allocates a fresh local id per stream and
+     * skips replies that belong to older streams, so a single socket is both correct and
+     * the cheapest option (N commands cost one handshake, not N).
      */
     suspend fun runShellAfterStart(
         context: Context,
@@ -126,38 +127,35 @@ object AdbStarter {
             if (it is CancellationException) throw it
             return Result.failure(AdbKeyException(it))
         }
-        return withContext(Dispatchers.IO) { verifyAndRun(port, key, log, onShellStart) }
-    }
-
-    /** Runs one shell command over a brand-new ADB connection and returns its stdout. */
-    private suspend fun runShellOnFreshConnection(
-        port: Int,
-        key: AdbKey,
-        command: String,
-        log: ((String) -> Unit)?,
-    ): String = withContext(Dispatchers.IO) {
-        AdbClient("127.0.0.1", port, key).use { client ->
-            connectWithRetry(client)
-            client.runShellCommand(command, log)
+        return withContext(Dispatchers.IO) {
+            try {
+                AdbClient("127.0.0.1", port, key).use { client ->
+                    log?.invoke("Opening an ADB connection on port $port for the shell check...")
+                    connectWithRetry(client)
+                    verifyAndRun(client, log, onShellStart)
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                log?.invoke("Post-start shell check could not open the ADB connection: ${e.message}")
+                Result.failure(e)
+            }
         }
     }
 
     /** Proves the session holds shell privileges, then runs [POST_START_SHELL_COMMANDS]. */
     private suspend fun verifyAndRun(
-        port: Int,
-        key: AdbKey,
+        client: AdbClient,
         log: ((String) -> Unit)?,
         onShellStart: (() -> Unit)?,
     ): Result<String> {
-        val idOutput = probeId(port, key, log)
+        val idOutput = probeId(client, log)
         val hasAdbPrivilege = SHELL_PRIVILEGE_REGEX.containsMatchIn(idOutput)
         if (!hasAdbPrivilege) {
-            // `id` can come back empty while the post-start streams settle. Fall back to a
-            // round-trip the device has to echo back: if the token returns, the transport
-            // really executed a command.
-            val roundTrip = runCatching {
-                runShellOnFreshConnection(port, key, SHELL_ROUND_TRIP_PROBE, log)
-            }.getOrNull().orEmpty()
+            // `id` can still come back empty on ROMs that briefly stall the shell service.
+            // Fall back to a round-trip the device has to echo back: if the token returns,
+            // the transport really executed a command.
+            val roundTrip = runCatching { client.runShellCommand(SHELL_ROUND_TRIP_PROBE, log) }
+                .getOrNull().orEmpty()
             if (!roundTrip.contains(SHELL_ROUND_TRIP_TOKEN)) {
                 log?.invoke(
                     "No ADB shell privilege (id reported: ${idOutput.ifEmpty { "no output" }}); " +
@@ -174,15 +172,7 @@ object AdbStarter {
         return runCatching {
             val outputs = StringBuilder()
             for (command in POST_START_SHELL_COMMANDS) {
-                var output = ""
-                // Two attempts: a fresh socket still occasionally closes early on ROMs that
-                // restart adbd while wireless debugging is settling.
-                for (attempt in 1..2) {
-                    output = runCatching { runShellOnFreshConnection(port, key, command, log) }
-                        .getOrNull().orEmpty()
-                    if (output.isNotEmpty()) break
-                    if (attempt == 1) delay(PROBE_RETRY_DELAY_MS)
-                }
+                val output = client.runShellCommand(command, log)
                 if (output.isNotEmpty()) {
                     if (outputs.isNotEmpty()) outputs.append('\n')
                     outputs.append(output)
@@ -194,16 +184,14 @@ object AdbStarter {
         }.onFailure { log?.invoke("Shell check failed: ${it.message}") }
     }
 
-    /** Runs `id` up to three times, each on its own connection; the first answer wins. */
+    /** Runs `id` up to three times on the same connection; the first answer wins. */
     private suspend fun probeId(
-        port: Int,
-        key: AdbKey,
+        client: AdbClient,
         log: ((String) -> Unit)?,
     ): String {
         var lastOutput = ""
         repeat(3) { attempt ->
-            val output = runCatching { runShellOnFreshConnection(port, key, "id", log) }
-                .getOrNull().orEmpty()
+            val output = runCatching { client.runShellCommand("id", log) }.getOrNull().orEmpty()
             if (output.isNotEmpty()) return output
             lastOutput = output
             if (attempt < 2) delay(PROBE_RETRY_DELAY_MS)

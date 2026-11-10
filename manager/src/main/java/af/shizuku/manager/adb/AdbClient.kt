@@ -37,6 +37,9 @@ class AdbClient(
 
     private var useTls = false
 
+    // Local stream ids for this connection; must never be reused, see [command].
+    private var nextLocalId = 1
+
     private var tlsSocket: SSLSocket? = null
     private var tlsInputStream: DataInputStream? = null
     private var tlsOutputStream: DataOutputStream? = null
@@ -123,14 +126,19 @@ class AdbClient(
         cmd: String,
         listener: ((ByteArray) -> Unit)? = null,
     ) {
-        val localId = 1
+        // A stream must be opened with its own local id. Reusing a fixed id made every
+        // command after the first read a leftover close packet from the previous stream
+        // and return an empty result, which looked like "the command ran, but printed
+        // nothing". Ids are never reused within a connection, and replies that belong to
+        // an older stream are skipped by [readFor].
+        val localId = nextLocalId++
         write(A_OPEN, localId, 0, cmd)
 
-        var message = read()
+        var message = readFor(localId)
         when (message.command) {
             A_OKAY -> {
                 while (true) {
-                    message = read()
+                    message = readFor(localId)
                     val remoteId = message.arg0
                     if (message.command == A_WRTE) {
                         message.data?.let { listener?.invoke(it) }
@@ -150,6 +158,19 @@ class AdbClient(
             else -> {
                 error("not A_OKAY or A_CLSE")
             }
+        }
+    }
+
+    /**
+     * Reads the next message that belongs to [localId], dropping leftovers addressed to
+     * earlier streams on the same connection (adbd may still flush a close packet for the
+     * previous `shell:` stream while the next one is already open).
+     */
+    private fun readFor(localId: Int): AdbMessage {
+        while (true) {
+            val message = read()
+            if (message.arg1 == localId) return message
+            Timber.tag(TAG).d("skipping stale ${message.toStringShort()} for local id $localId")
         }
     }
 
