@@ -457,6 +457,9 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
         // falling back to manual. The pairing assistant may have just been enabled (its receiver
         // not bound yet) so the first broadcast can be silently dropped (k2013 one-tap flow-fix).
         const val MAX_AUTO_ACK_RETRIES = 2
+
+        // Lines of shell stdout shown on the step card; the full output stays in the log.
+        const val SHELL_PREVIEW_MAX_LINES = 6
     }
 
     private val appContext = getApplication<Application>().applicationContext
@@ -1276,11 +1279,7 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
         }
         withContext(Dispatchers.Main) {
             result.onSuccess { out ->
-                updateStep(
-                    stepId,
-                    StepStatus.COMPLETED,
-                    out.ifEmpty { appContext.getString(R.string.starter_step_shell_check_empty) }
-                )
+                updateStep(stepId, StepStatus.COMPLETED, summarizeShellOutput(out))
             }.onFailure { e ->
                 // WARNING survives markCompleted(), so a failed check stays visible as a
                 // yellow card instead of being normalised into a green one at the end.
@@ -1304,6 +1303,19 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+    }
+
+    /**
+     * Keeps the step card readable: the whole stdout already goes to the log, but a command
+     * like `pm list packages -d` can print dozens of lines and would push the timeline off
+     * screen, so the card shows the first few lines plus the total count.
+     */
+    private fun summarizeShellOutput(out: String): String {
+        val lines = out.lines().filter { it.isNotBlank() }
+        if (lines.isEmpty()) return appContext.getString(R.string.starter_step_shell_check_empty)
+        if (lines.size <= SHELL_PREVIEW_MAX_LINES) return lines.joinToString("\n")
+        return lines.take(SHELL_PREVIEW_MAX_LINES).joinToString("\n") + "\n" +
+            appContext.getString(R.string.starter_step_shell_check_truncated, lines.size)
     }
 
     private fun markCompleted() {

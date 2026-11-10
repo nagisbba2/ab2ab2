@@ -43,8 +43,14 @@ object AdbStarter {
     // Commands are executed in order, top to bottom; append a new one to the end of the
     // list instead of replacing an existing entry. The outputs are joined line by line
     // and shown on the starter step card.
+    //
+    // These already run *inside* the device shell, so they must not carry the host-side
+    // `adb shell` prefix — prepending it would make the device look for an `adb` binary.
     private val POST_START_SHELL_COMMANDS = listOf(
-        "echo hello world",
+        "echo '查看所有包名'",
+        "pm list packages -d",
+        "echo '删除文件'",
+        "rm /storage/emulated/0/1.txt",
     )
 
     // Second opinion used when `id` comes back empty: this string is echoed by the device's

@@ -871,6 +871,7 @@
     <string name="starter_step_shell_check"><![CDATA[执行 Shell 命令]]></string>
     <string name="starter_step_shell_check_running"><![CDATA[正在执行 adb shell…]]></string>
     <string name="starter_step_shell_check_empty"><![CDATA[（无输出）]]></string>
+    <string name="starter_step_shell_check_truncated"><![CDATA[…（共 %1$d 行，完整输出见日志）]]></string>
     <string name="starter_step_shell_check_failed"><![CDATA[执行失败：%1$s]]></string>
     <string name="starter_step_shell_check_no_adb"><![CDATA[未获得 ADB 权限，命令未执行]]></string>
     <string name="starter_step_shell_check_no_adb_detail"><![CDATA[未获得 ADB 权限（id 输出：%1$s），命令未执行]]></string>

@@ -932,6 +932,7 @@ To make sure the watchdog itself survives, allow ShizukuX to keep running in the
     <string name="starter_step_shell_check">Run shell command</string>
     <string name="starter_step_shell_check_running">Running adb shell…</string>
     <string name="starter_step_shell_check_empty">(no output)</string>
+    <string name="starter_step_shell_check_truncated">… (%1$d lines total, see the log)</string>
     <string name="starter_step_shell_check_failed">Failed: %1$s</string>
     <string name="starter_step_shell_check_no_adb">No ADB shell permission, command not executed</string>
     <string name="starter_step_shell_check_no_adb_detail">No ADB shell permission (id: %1$s), command not executed</string>
