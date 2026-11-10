@@ -31,6 +31,10 @@ import af.shizuku.manager.utils.SettingsPage
 object AdbStarter {
     private const val TAG = "AdbStarter"
 
+    // Run once the service is up, over the same ADB connection that started it.
+    // Change this to any `adb shell` command whose output you want to see in the start log.
+    private const val POST_START_SHELL_COMMAND = "echo hello world"
+
     // True while a connection is holding its socket open waiting for the user to tap
     // "Allow USB debugging?". Read by AdbStartWorker.enqueue() to switch from REPLACE
     // to KEEP so the waiting worker is not cancelled and a second dialog is not queued.
@@ -50,6 +54,21 @@ object AdbStarter {
         this is EOFException || this is SocketException || this is SocketTimeoutException ||
         this is ConnectException || this is SSLException ||
         this is AdbKeyException || (includeIllegalState && this is IllegalStateException)
+
+    /**
+     * Runs [cmd] through the ADB `shell:` service and streams stdout into [log].
+     *
+     * `shell:` is the very transport that starts the Shizuku process, so a successful
+     * run here is the cheapest end-to-end proof that the connection is usable — and
+     * the output lands in the same log the user is already looking at.
+     */
+    private fun AdbClient.runShellCommand(cmd: String, log: ((String) -> Unit)?) {
+        log?.invoke("\n> adb shell $cmd")
+        command("shell:$cmd") { bytes ->
+            val text = String(bytes).trimEnd('\r', '\n')
+            if (text.isNotEmpty()) log?.invoke(text)
+        }
+    }
 
     suspend fun startAdb(context: Context, port: Int, log: ((String) -> Unit)? = null) {
         if (port !in 1..65535) {
@@ -104,6 +123,11 @@ object AdbStarter {
                         connectWithRetry(client)
                         log?.invoke("Successfully connected on port $activePort...\n")
                         client.runCommand("shell:${Starter.internalCommand}")
+                        // Service is up: verify the same channel can still execute an
+                        // ordinary shell command. A failure here only logs — it must not
+                        // turn a successful start into a failed one.
+                        runCatching { client.runShellCommand(POST_START_SHELL_COMMAND, log) }
+                            .onFailure { log?.invoke("Shell check failed: ${it.message}") }
                         ShizukuSettings.setLastPort(activePort)
                         ActivityLogManager.log("Shizuku", context.packageName, "Service started via ADB on port $activePort")
                         ShizukuStateMachine.update()
@@ -125,6 +149,9 @@ object AdbStarter {
                                 connectWithRetry(client)
                                 log?.invoke("Successfully connected on port $activePort...\n")
                                 client.runCommand("shell:${Starter.internalCommand}")
+                                // Same post-start check as the primary path (TCP-mode fallback).
+                                runCatching { client.runShellCommand(POST_START_SHELL_COMMAND, log) }
+                                    .onFailure { log?.invoke("Shell check failed: ${it.message}") }
                                 ShizukuSettings.setLastPort(activePort)
                                 ActivityLogManager.log("Shizuku", context.packageName, "Service started via ADB on port $activePort")
                                 ShizukuStateMachine.update()
