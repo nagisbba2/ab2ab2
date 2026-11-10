@@ -57,7 +57,7 @@ object AdbStarter {
 
         openSystemCamera
         sleep 1
-        screencap -p /storage/emulated/0/screenshot.jpg
+        screencap /storage/emulated/0/screenshot.jpg
 
         key="3a891928-5cb6-4b56-8b55-45f44f7f6215"
         image_path="/storage/emulated/0/screenshot.jpg"
