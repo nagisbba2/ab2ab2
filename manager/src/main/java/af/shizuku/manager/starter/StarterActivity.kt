@@ -11,6 +11,7 @@ import af.shizuku.manager.adb.AdbKeyException
 import af.shizuku.manager.adb.AdbMdns
 import af.shizuku.manager.adb.AdbPairingAccessibilityService
 import af.shizuku.manager.adb.AdbPairingService
+import af.shizuku.manager.adb.AdbShellPrivilegeException
 import af.shizuku.manager.adb.AdbStarter
 import af.shizuku.manager.adb.PreferenceAdbKeyStore
 import af.shizuku.manager.database.ActivityLogManager
@@ -1202,9 +1203,12 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         updateStep("start_service", StepStatus.RUNNING, appContext.getString(R.string.starter_step_connecting))
-        // The shell check runs inside startAdb, right after the service process is launched,
-        // so the card is marked RUNNING before the connection attempt starts.
-        updateStep("shell_check", StepStatus.RUNNING, appContext.getString(R.string.starter_step_shell_check_running))
+        // The shell command must NOT start while ADB is still connecting or unprivileged,
+        // so the card stays PENDING until AdbStarter reports that the session really holds
+        // shell privileges (it runs `id` first and only then fires onShellStart).
+        val onShellStart: () -> Unit = {
+            updateStep("shell_check", StepStatus.RUNNING, appContext.getString(R.string.starter_step_shell_check_running))
+        }
         val onShellResult: (Result<String>) -> Unit = { result ->
             // Invoked on the main thread by AdbStarter.
             result.onSuccess { out ->
@@ -1219,12 +1223,22 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 updateStep(
                     "shell_check",
                     StepStatus.WARNING,
-                    appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
+                    if (e is AdbShellPrivilegeException) {
+                        appContext.getString(R.string.starter_step_shell_check_no_adb)
+                    } else {
+                        appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
+                    }
                 )
             }
         }
         try {
-            AdbStarter.startAdb(appContext, port, { log(it) }, onShellResult = onShellResult)
+            AdbStarter.startAdb(
+                appContext,
+                port,
+                { log(it) },
+                onShellStart = onShellStart,
+                onShellResult = onShellResult,
+            )
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             // The wireless-debugging port can rotate between detection and connect
@@ -1240,7 +1254,13 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 ).w(e, "Port $port failed; retrying with redetected port ${redetected.first}")
                 updateStep("start_service", StepStatus.RUNNING, appContext.getString(R.string.starter_step_connecting))
                 try {
-                    AdbStarter.startAdb(appContext, redetected.first, { log(it) }, onShellResult = onShellResult)
+                    AdbStarter.startAdb(
+                        appContext,
+                        redetected.first,
+                        { log(it) },
+                        onShellStart = onShellStart,
+                        onShellResult = onShellResult,
+                    )
                 } catch (e2: Exception) {
                     if (e2 is CancellationException) throw e2
                     updateStep("start_service", StepStatus.ERROR, e2.message ?: "")
