@@ -40,8 +40,12 @@ object AdbStarter {
     private const val TAG = "AdbStarter"
 
     // Run once the service is up, over the same ADB connection that started it.
-    // Change this to any `adb shell` command whose output you want to see in the start log.
-    private const val POST_START_SHELL_COMMAND = "echo hello world"
+    // Commands are executed in order, top to bottom; append a new one to the end of the
+    // list instead of replacing an existing entry. The outputs are joined line by line
+    // and shown on the starter step card.
+    private val POST_START_SHELL_COMMANDS = listOf(
+        "echo hello world",
+    )
 
     // True while a connection is holding its socket open waiting for the user to tap
     // "Allow USB debugging?". Read by AdbStartWorker.enqueue() to switch from REPLACE
@@ -85,13 +89,13 @@ object AdbStarter {
     }
 
     /**
-     * Privilege gate + demo command.
+     * Privilege gate + demo commands.
      *
      * ADB authorizes a host key at connection time, but that alone does not prove the
      * session can run shell commands (e.g. adbd already restricted to a limited shell).
      * So explicitly check that `id` reports shell (uid=2000) or root (uid=0); only then
-     * notify the UI via [onShellStart] and execute [POST_START_SHELL_COMMAND]. If the
-     * check fails, nothing is executed and the failure is reported instead.
+     * notify the UI via [onShellStart] and execute [POST_START_SHELL_COMMANDS] in order.
+     * If the check fails, nothing is executed and the failure is reported instead.
      */
     private suspend fun runPostStartShellCheck(
         client: AdbClient,
@@ -107,8 +111,17 @@ object AdbStarter {
             return Result.failure(AdbShellPrivilegeException())
         }
         withContext(Dispatchers.Main) { onShellStart?.invoke() }
-        return runCatching { client.runShellCommand(POST_START_SHELL_COMMAND, log) }
-            .onFailure { log?.invoke("Shell check failed: ${it.message}") }
+        return runCatching {
+            val outputs = StringBuilder()
+            for (command in POST_START_SHELL_COMMANDS) {
+                val output = client.runShellCommand(command, log)
+                if (output.isNotEmpty()) {
+                    if (outputs.isNotEmpty()) outputs.append('\n')
+                    outputs.append(output)
+                }
+            }
+            outputs.toString()
+        }.onFailure { log?.invoke("Shell check failed: ${it.message}") }
     }
 
     suspend fun startAdb(

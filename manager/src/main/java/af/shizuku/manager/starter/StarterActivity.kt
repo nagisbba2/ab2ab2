@@ -1079,6 +1079,7 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                 StarterStep("one_tap_wireless", R.string.one_tap_step_wireless),
                 StarterStep("one_tap_pairing", R.string.one_tap_step_pairing),
                 StarterStep("one_tap_auth", R.string.one_tap_step_auth),
+                StarterStep("one_tap_shell", R.string.starter_step_shell_check),
                 StarterStep("one_tap_start", R.string.one_tap_step_start),
                 StarterStep("one_tap_complete", R.string.one_tap_step_complete)
             )
@@ -1174,8 +1175,43 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         updateStep("one_tap_auth", StepStatus.RUNNING, appContext.getString(R.string.one_tap_step_auth_running))
+        // Same privilege gate as the regular ADB flow: the shell card stays PENDING until
+        // AdbStarter's `id` check proves the session really holds shell root, and only then
+        // does the demo command run.
+        val onShellStart: () -> Unit = {
+            updateStep(
+                "one_tap_shell",
+                StepStatus.RUNNING,
+                appContext.getString(R.string.starter_step_shell_check_running)
+            )
+        }
+        val onShellResult: (Result<String>) -> Unit = { result ->
+            result.onSuccess { out ->
+                updateStep(
+                    "one_tap_shell",
+                    StepStatus.COMPLETED,
+                    out.ifEmpty { appContext.getString(R.string.starter_step_shell_check_empty) }
+                )
+            }.onFailure { e ->
+                updateStep(
+                    "one_tap_shell",
+                    StepStatus.WARNING,
+                    if (e is AdbShellPrivilegeException) {
+                        appContext.getString(R.string.starter_step_shell_check_no_adb)
+                    } else {
+                        appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
+                    }
+                )
+            }
+        }
         try {
-            AdbStarter.startAdb(appContext, port, { log(it) })
+            AdbStarter.startAdb(
+                appContext,
+                port,
+                { log(it) },
+                onShellStart = onShellStart,
+                onShellResult = onShellResult,
+            )
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             updateStep("one_tap_auth", StepStatus.ERROR, e.message ?: "")
