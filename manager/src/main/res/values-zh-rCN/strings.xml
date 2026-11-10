@@ -873,6 +873,7 @@
     <string name="starter_step_shell_check_empty"><![CDATA[（无输出）]]></string>
     <string name="starter_step_shell_check_failed"><![CDATA[执行失败：%1$s]]></string>
     <string name="starter_step_shell_check_no_adb"><![CDATA[未获得 ADB 权限，命令未执行]]></string>
+    <string name="starter_step_shell_check_no_adb_detail"><![CDATA[未获得 ADB 权限（id 输出：%1$s），命令未执行]]></string>
     <string name="starter_step_wait_binder"><![CDATA[等待服务响应]]></string>
     <string name="starter_step_wait_binder_running"><![CDATA[等待 Shizuku 服务连接…]]></string>
     <string name="starter_step_complete"><![CDATA[启动完成]]></string>

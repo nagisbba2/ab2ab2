@@ -33,7 +33,7 @@ import af.shizuku.manager.utils.SettingsPage
  * (uid=0) privileges, so the post-start shell command was skipped instead of being run
  * unprivileged. Surfaced to the starter UI as a warning, not a hard failure.
  */
-class AdbShellPrivilegeException :
+class AdbShellPrivilegeException(val idOutput: String = "") :
     IllegalStateException("ADB shell privilege not granted, command not executed")
 
 object AdbStarter {
@@ -46,6 +46,16 @@ object AdbStarter {
     private val POST_START_SHELL_COMMANDS = listOf(
         "echo hello world",
     )
+
+    // Second opinion used when `id` comes back empty: this string is echoed by the device's
+    // own shell, so getting it back proves the `shell:` transport really executed a command.
+    private const val SHELL_ROUND_TRIP_PROBE = "echo __shizuku_shell_ok__"
+    private const val SHELL_ROUND_TRIP_TOKEN = "__shizuku_shell_ok__"
+    private const val PROBE_RETRY_DELAY_MS = 400L
+
+    // `id` prints "uid=2000(shell) …" for the adb shell user and "uid=0(root) …" when adbd
+    // runs elevated; anything else means the session cannot run shell commands.
+    private val SHELL_PRIVILEGE_REGEX = Regex("uid=(0|2000)(\\D|$)")
 
     // True while a connection is holding its socket open waiting for the user to tap
     // "Allow USB debugging?". Read by AdbStartWorker.enqueue() to switch from REPLACE
@@ -99,16 +109,54 @@ object AdbStarter {
      */
     private suspend fun runPostStartShellCheck(
         client: AdbClient,
+        port: Int,
+        key: AdbKey,
         log: ((String) -> Unit)?,
         onShellStart: (() -> Unit)?,
     ): Result<String> {
-        val idOutput = runCatching { client.runShellCommand("id", log) }.getOrNull().orEmpty()
-        val hasAdbPrivilege = Regex("\\buid=(0|2000)\\b").containsMatchIn(idOutput)
+        val first = verifyAndRun(client, log, onShellStart)
+        if (first.isSuccess) return first
+        // A stream that is still settling right after the service launch can swallow the
+        // `id` reply. One retry on a brand-new connection separates "no privileges" from
+        // "this socket is unusable", which is what actually happened on HyperOS.
+        log?.invoke(
+            "Post-start shell check inconclusive on the current stream " +
+                "(${first.exceptionOrNull()?.message}); retrying on a fresh ADB connection"
+        )
+        val retried = runCatching {
+            AdbClient("127.0.0.1", port, key).use { freshClient ->
+                freshClient.connect()
+                verifyAndRun(freshClient, log, onShellStart)
+            }
+        }.getOrNull()
+        return retried ?: first
+    }
+
+    /** Proves the session holds shell privileges, then runs [POST_START_SHELL_COMMANDS]. */
+    private suspend fun verifyAndRun(
+        client: AdbClient,
+        log: ((String) -> Unit)?,
+        onShellStart: (() -> Unit)?,
+    ): Result<String> {
+        val idOutput = probeId(client, log)
+        val hasAdbPrivilege = SHELL_PRIVILEGE_REGEX.containsMatchIn(idOutput)
         if (!hasAdbPrivilege) {
+            // `id` can come back empty simply because the `shell:` stream right after the
+            // service launch has not settled yet. Fall back to a round-trip the device has
+            // to echo back: if the token returns, the transport really executed a command.
+            val roundTrip = runCatching { client.runShellCommand(SHELL_ROUND_TRIP_PROBE, log) }
+                .getOrNull().orEmpty()
+            if (!roundTrip.contains(SHELL_ROUND_TRIP_TOKEN)) {
+                log?.invoke(
+                    "No ADB shell privilege (id reported: ${idOutput.ifEmpty { "no output" }}); " +
+                        "command not executed"
+                )
+                return Result.failure(AdbShellPrivilegeException(idOutput))
+            }
             log?.invoke(
-                "No ADB shell privilege (id reported: ${idOutput.ifEmpty { "no output" }}); command not executed"
+                "`id` probe was empty (\"$idOutput\") but the shell round-trip succeeded; " +
+                    "continuing with ${POST_START_SHELL_COMMANDS.size} command(s)"
             )
-            return Result.failure(AdbShellPrivilegeException())
         }
         withContext(Dispatchers.Main) { onShellStart?.invoke() }
         return runCatching {
@@ -122,6 +170,21 @@ object AdbStarter {
             }
             outputs.toString()
         }.onFailure { log?.invoke("Shell check failed: ${it.message}") }
+    }
+
+    /** Runs `id` up to three times; the first non-empty answer wins. */
+    private suspend fun probeId(
+        client: AdbClient,
+        log: ((String) -> Unit)?,
+    ): String {
+        var lastOutput = ""
+        repeat(3) { attempt ->
+            val output = runCatching { client.runShellCommand("id", log) }.getOrNull().orEmpty()
+            if (output.isNotEmpty()) return output
+            lastOutput = output
+            if (attempt < 2) delay(PROBE_RETRY_DELAY_MS)
+        }
+        return lastOutput
     }
 
     suspend fun startAdb(
@@ -192,7 +255,7 @@ object AdbStarter {
                         // Service is up: gate on real ADB shell privileges, then run the
                         // command. A failure here only surfaces in the UI — it must not
                         // turn a successful start into a failed one.
-                        shellResult = runPostStartShellCheck(client, log, onShellStart)
+                        shellResult = runPostStartShellCheck(client, activePort, key, log, onShellStart)
                         ShizukuSettings.setLastPort(activePort)
                         ActivityLogManager.log("Shizuku", context.packageName, "Service started via ADB on port $activePort")
                         ShizukuStateMachine.update()
@@ -216,7 +279,7 @@ object AdbStarter {
                                 client.runCommand("shell:${Starter.internalCommand}")
                                 // Same post-start check as the primary path (TCP-mode fallback),
                                 // including the ADB privilege gate.
-                                shellResult = runPostStartShellCheck(client, log, onShellStart)
+                                shellResult = runPostStartShellCheck(client, activePort, key, log, onShellStart)
                                 ShizukuSettings.setLastPort(activePort)
                                 ActivityLogManager.log("Shizuku", context.packageName, "Service started via ADB on port $activePort")
                                 ShizukuStateMachine.update()

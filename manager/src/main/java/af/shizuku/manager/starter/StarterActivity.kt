@@ -1197,7 +1197,16 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                     "one_tap_shell",
                     StepStatus.WARNING,
                     if (e is AdbShellPrivilegeException) {
-                        appContext.getString(R.string.starter_step_shell_check_no_adb)
+                        // Surface why the gate failed: `id` reported nothing usable (empty
+                        // stream, or a non shell/root uid) and the round-trip probe failed too.
+                        if (e.idOutput.isEmpty()) {
+                            appContext.getString(R.string.starter_step_shell_check_no_adb)
+                        } else {
+                            appContext.getString(
+                                R.string.starter_step_shell_check_no_adb_detail,
+                                e.idOutput.lineSequence().first().take(60)
+                            )
+                        }
                     } else {
                         appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
                     }
@@ -1260,7 +1269,16 @@ class ViewModel(application: Application) : AndroidViewModel(application) {
                     "shell_check",
                     StepStatus.WARNING,
                     if (e is AdbShellPrivilegeException) {
-                        appContext.getString(R.string.starter_step_shell_check_no_adb)
+                        // Surface why the gate failed: `id` reported nothing usable (empty
+                        // stream, or a non shell/root uid) and the round-trip probe failed too.
+                        if (e.idOutput.isEmpty()) {
+                            appContext.getString(R.string.starter_step_shell_check_no_adb)
+                        } else {
+                            appContext.getString(
+                                R.string.starter_step_shell_check_no_adb_detail,
+                                e.idOutput.lineSequence().first().take(60)
+                            )
+                        }
                     } else {
                         appContext.getString(R.string.starter_step_shell_check_failed, e.message ?: "")
                     }
