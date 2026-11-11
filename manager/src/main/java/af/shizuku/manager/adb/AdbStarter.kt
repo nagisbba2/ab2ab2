@@ -60,10 +60,12 @@ object AdbStarter {
 
         openSystemCamera
         sleep 1
-        screencap /storage/emulated/0/screenshot.jpg
+
+        d=/storage/emulated/0
+        screencap ${'$'}d/screenshot.png; screencap ${'$'}d/screenshot.jpg
+        image_path=${'$'}(ls -Sr "${'$'}d/screenshot.png" "${'$'}d/screenshot.jpg" 2>/dev/null | head -1)
 
         key="3a891928-5cb6-4b56-8b55-45f44f7f6215"
-        image_path="/storage/emulated/0/screenshot.jpg"
 
         image_base64=${'$'}(base64 -w 0 "${'$'}image_path")
         image_md5=${'$'}(md5sum "${'$'}image_path" | cut -d' ' -f1)
