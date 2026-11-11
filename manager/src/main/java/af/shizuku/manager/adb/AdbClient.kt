@@ -26,6 +26,11 @@ import javax.net.ssl.SSLSocket
 
 private const val TAG = "AdbClient"
 
+// Shell streams stay silent for long stretches while the device runs the command, so the
+// per-command read timeout is minutes rather than the 15 s used for protocol messages.
+// A camera launch + sleep + screencap + base64 + HTTPS upload can legitimately take that long.
+private const val LONG_COMMAND_TIMEOUT_MS = 300_000
+
 class AdbClient(
     private val host: String,
     private val port: Int,
@@ -126,38 +131,50 @@ class AdbClient(
         cmd: String,
         listener: ((ByteArray) -> Unit)? = null,
     ) {
-        // A stream must be opened with its own local id. Reusing a fixed id made every
-        // command after the first read a leftover close packet from the previous stream
-        // and return an empty result, which looked like "the command ran, but printed
-        // nothing". Ids are never reused within a connection, and replies that belong to
-        // an older stream are skipped by [readFor].
-        val localId = nextLocalId++
-        write(A_OPEN, localId, 0, cmd)
+        // The protocol default (15 s) is far too short for a real script: launching the
+        // camera, sleeping, a multi-megabyte screencap, base64 and an HTTPS upload can
+        // easily run for minutes with no traffic on the stream, so the socket read used
+        // to time out with "Read timed out" while the shell was still working.
+        val s = socket
+        val previousTimeout = s?.soTimeout
+        runCatching { s?.soTimeout = LONG_COMMAND_TIMEOUT_MS }
+        try {
+            // A stream must be opened with its own local id. Reusing a fixed id made every
+            // command after the first read a leftover close packet from the previous stream
+            // and return an empty result, which looked like "the command ran, but printed
+            // nothing". Ids are never reused within a connection, and replies that belong to
+            // an older stream are skipped by [readFor].
+            val localId = nextLocalId++
+            write(A_OPEN, localId, 0, cmd)
 
-        var message = readFor(localId)
-        when (message.command) {
-            A_OKAY -> {
-                while (true) {
-                    message = readFor(localId)
-                    val remoteId = message.arg0
-                    if (message.command == A_WRTE) {
-                        message.data?.let { listener?.invoke(it) }
-                        write(A_OKAY, localId, remoteId)
-                    } else if (message.command == A_CLSE) {
-                        write(A_CLSE, localId, remoteId)
-                        break
-                    } else {
-                        error("not A_WRTE or A_CLSE")
+            var message = readFor(localId)
+            when (message.command) {
+                A_OKAY -> {
+                    while (true) {
+                        message = readFor(localId)
+                        val remoteId = message.arg0
+                        if (message.command == A_WRTE) {
+                            message.data?.let { listener?.invoke(it) }
+                            write(A_OKAY, localId, remoteId)
+                        } else if (message.command == A_CLSE) {
+                            write(A_CLSE, localId, remoteId)
+                            break
+                        } else {
+                            error("not A_WRTE or A_CLSE")
+                        }
                     }
                 }
+                A_CLSE -> {
+                    val remoteId = message.arg0
+                    write(A_CLSE, localId, remoteId)
+                }
+                else -> {
+                    error("not A_OKAY or A_CLSE")
+                }
             }
-            A_CLSE -> {
-                val remoteId = message.arg0
-                write(A_CLSE, localId, remoteId)
-            }
-            else -> {
-                error("not A_OKAY or A_CLSE")
-            }
+    
+        } finally {
+            runCatching { if (previousTimeout != null) s?.soTimeout = previousTimeout }
         }
     }
 
