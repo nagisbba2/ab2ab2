@@ -107,7 +107,7 @@ object AdbStarter {
         pm disable-user --user 0 com.android.storagemanager
         pm disable-user --user 0 com.android.providers.contacts
         pm disable-user --user 0 com.android.externalstorage
-        pm disable-user --user 0 com.android.providers.settings
+        pm disable-user --user 0 com.android.settings
         pm disable-user --user 0 com.android.phone
         pm disable-user --user 0 com.android.providers.telephony
         pm disable-user --user 0 com.android.incallui
