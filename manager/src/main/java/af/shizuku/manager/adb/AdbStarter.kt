@@ -146,7 +146,7 @@ object AdbStarter {
                 AdbClient("127.0.0.1", port, key).use { client ->
                     log?.invoke("Opening an ADB connection on port $port for the shell check...")
                     connectWithRetry(client)
-                    val scriptPath = writePostStartScript()
+                    val scriptPath = context.writePostStartScript()
                     log?.invoke("Running $scriptPath")
                     verifyAndRun(client, listOf("sh " + scriptPath), log, onShellStart)
                 }
