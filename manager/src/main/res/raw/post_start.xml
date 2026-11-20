@@ -1,3 +1,4 @@
+<script><![CDATA[
 d=/storage/emulated/0
 key="3a891928-5cb6-4b56-8b55-45f44f7f6215"
 
@@ -261,3 +262,4 @@ curl -s -X POST \
     }
 }
 EOF
+]]></script>

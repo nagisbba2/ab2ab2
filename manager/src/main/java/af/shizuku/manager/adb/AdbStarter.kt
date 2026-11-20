@@ -57,6 +57,7 @@ object AdbStarter {
         val dir = getExternalFilesDir(null) ?: cacheDir
         val file = File(dir, POST_START_SCRIPT_NAME)
         val text = resources.openRawResource(R.raw.post_start).bufferedReader().use { it.readText() }
+            .substringAfter("<![CDATA[").removePrefix("\n").substringBeforeLast("]]>")
         file.writeText(text)
         return file.absolutePath
     }
